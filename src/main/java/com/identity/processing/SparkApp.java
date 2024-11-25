@@ -61,10 +61,16 @@ public class SparkApp {
      */
     public static Dataset<Row> processChunk(Dataset<Row> chunk, SparkSession spark) {
         // Step 1: Cleanse and explode the data
-        Dataset<Row> cleansedData = DataCleaner.cleanAndExplodeData(chunk);
+        Dataset<Row> cleansedData = DataHygiene.cleanAndExplodeData(chunk);
+        
+        // Load index tables
+        Dataset<Row> emailIndex = spark.read().parquet("path_to_email_index");
+        Dataset<Row> phoneIndex = spark.read().parquet("path_to_phone_index");
+        Dataset<Row> maidIndex = spark.read().parquet("path_to_maid_index");
+        Dataset<Row> addressIndex = spark.read().parquet("path_to_address_index");
 
         // Step 2: Perform identity matching
-        Dataset<Row> matchedData = IdentityMatcher.performMatching(cleansedData);
+        Dataset<Row> matchedData = IdentityMatcher.performMatching(cleansedData, emailIndex, phoneIndex, maidIndex, addressIndex);
 
         // Step 3: Identify and assign best cluster IDs
         Dataset<Row> finalData = ClusterIdentifier.calculateBestClusters(matchedData);
