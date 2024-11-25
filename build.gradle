@@ -1,0 +1,44 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.example'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Spark Core library
+    implementation 'org.apache.spark:spark-core_2.12:3.4.1'
+
+    // Spark SQL library
+    implementation 'org.apache.spark:spark-sql_2.12:3.4.1'
+
+    // Logging dependencies
+    implementation 'org.slf4j:slf4j-api:1.7.36'
+    implementation 'ch.qos.logback:logback-classic:1.2.11'
+
+    // Optional: Add Hadoop client if interacting with HDFS
+    implementation 'org.apache.hadoop:hadoop-client:3.3.6'
+
+    // Optional: Spark MLlib if working with machine learning
+    implementation 'org.apache.spark:spark-mllib_2.12:3.4.1'
+
+    // Optional: Spark Streaming for real-time processing
+    implementation 'org.apache.spark:spark-streaming_2.12:3.4.1'
+
+    // JUnit for testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11) // Use Java 11 or later
+    }
+}
+
+test {
+    useJUnitPlatform()
+}
