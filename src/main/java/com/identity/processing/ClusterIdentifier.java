@@ -5,19 +5,20 @@ import org.apache.spark.sql.Row;
 import org.apache.spark.sql.functions;
 
 /**
- * Identifies the best cluster IDs by grouping records, calculating weights, and resolving conflicts.
+ * Identifies the best cluster IDs and ensures 1:1 mapping for input records.
  */
 public class ClusterIdentifier {
 
     /**
-     * Groups clusters by `Unique_ID` and calculates the best cluster ID based on index weights and Levenshtein score.
+     * Groups clusters by `Unique_ID`, resolves the best cluster ID, and joins back with original data.
      *
-     * @param data Dataset with matched records and calculated cluster IDs.
-     * @return Dataset with the best cluster ID for each `Unique_ID`.
+     * @param originalData Original client dataset (before transformations).
+     * @param matchedData  Dataset with matched records and calculated cluster IDs.
+     * @return Dataset with the best cluster ID joined back with the original data.
      */
-    public static Dataset<Row> calculateBestClusters(Dataset<Row> data) {
+    public static Dataset<Row> calculateBestClusters(Dataset<Row> originalData, Dataset<Row> matchedData) {
         // Add index weights
-        Dataset<Row> weightedData = data.withColumn(
+        Dataset<Row> weightedData = matchedData.withColumn(
                 "weight",
                 functions.expr("case when index_type = 'Name_Address_Index' then 20 " +
                                "when index_type = 'Email_Index' then 10 " +
@@ -26,20 +27,20 @@ public class ClusterIdentifier {
                                "when index_type = 'DOB_Index' then 12 end")
         );
 
-        // Group by `Unique_ID` and calculate the best cluster ID based on weights and scores
-        Dataset<Row> groupedData = weightedData.groupBy("Unique_ID")
+        // Resolve to 1 record per Unique_ID by selecting the best match
+        Dataset<Row> deduplicatedData = weightedData.groupBy("Unique_ID")
                 .agg(
-                        functions.first("Unique_ID").alias("client_rec_id"),
+                        functions.first("Unique_ID").alias("client_rec_id"), // Alias for clarity
+                        functions.first("Generated_Record_ID").alias("Generated_Record_ID"),
                         functions.max("weight").alias("max_weight"),
-                        functions.max("levenshtein_score").alias("best_levenshtein_score"),
-                        functions.first("clusterId").alias("best_cluster_id")
+                        functions.first("clusterId").alias("best_cluster_id"),
+                        functions.max("levenshtein_score").alias("best_levenshtein_score")
                 );
 
         // Join back with original data to ensure full context
-        Dataset<Row> finalData = weightedData.join(groupedData, "Unique_ID")
-                .withColumn("final_cluster_id", functions.col("best_cluster_id"))
-                .drop("max_weight", "best_levenshtein_score", "best_cluster_id");
+        Dataset<Row> finalOutput = originalData.join(deduplicatedData, "Unique_ID")
+                .withColumn("final_cluster_id", functions.col("best_cluster_id"));
 
-        return finalData;
+        return finalOutput;
     }
 }

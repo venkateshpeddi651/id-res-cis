@@ -1,5 +1,8 @@
 package com.identity.processing;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
@@ -35,18 +38,25 @@ public class SparkApp {
 
             // Check record count and split if necessary
             long recordCount = inputData.count();
-            Dataset<Row> processedData;
+            List<Dataset<Row>> processedChunks = new ArrayList<>();
 
             if (recordCount > 400_000_000) {
-                // Split and process in manageable chunks
-                processedData = ChunkProcessor.splitAndProcessChunks(inputData, recordCount, 400_000_000, spark);
+                // Process data in chunks
+                List<Dataset<Row>> dataChunks = ChunkProcessor.splitIntoChunks(inputData, recordCount, 400_000_000, spark);
+                for (Dataset<Row> chunk : dataChunks) {
+                    processedChunks.add(processChunk(chunk, spark));
+                }
             } else {
                 // Process the entire dataset directly
-                processedData = processChunk(inputData, spark);
+                processedChunks.add(processChunk(inputData, spark));
             }
 
+            // Combine all processed chunks into a single dataset
+            Dataset<Row> combinedData = combineChunks(processedChunks, spark);
+
             // Save the final processed dataset
-            processedData.write().mode("overwrite").parquet(outputPath);
+            combinedData.write().mode("overwrite").parquet(outputPath);
+
 
         } catch (Exception e) {
             System.err.println("Error processing data: " + e.getMessage());
@@ -73,8 +83,28 @@ public class SparkApp {
         Dataset<Row> matchedData = IdentityMatcher.performMatching(cleansedData, emailIndex, phoneIndex, maidIndex, addressIndex);
 
         // Step 3: Identify and assign best cluster IDs
-        Dataset<Row> finalData = ClusterIdentifier.calculateBestClusters(matchedData);
+        Dataset<Row> finalData = ClusterIdentifier.calculateBestClusters(chunk, matchedData);
 
         return finalData;
+    }
+    
+    /**
+     * Combines all processed chunks into a single dataset.
+     *
+     * @param chunks List of processed dataset chunks.
+     * @param spark  SparkSession instance.
+     * @return Combined dataset.
+     */
+    private static Dataset<Row> combineChunks(List<Dataset<Row>> chunks, SparkSession spark) {
+        if (chunks.isEmpty()) {
+            throw new IllegalArgumentException("No chunks to combine.");
+        }
+
+        Dataset<Row> combined = chunks.get(0); // Initialize with the first chunk
+        for (int i = 1; i < chunks.size(); i++) {
+            combined = combined.union(chunks.get(i));
+        }
+
+        return combined;
     }
 }
