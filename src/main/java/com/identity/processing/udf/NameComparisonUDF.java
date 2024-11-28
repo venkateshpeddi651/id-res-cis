@@ -1,60 +1,55 @@
 package com.identity.processing.udf;
 
-import org.apache.spark.sql.api.java.UDF12;
+import org.apache.spark.sql.api.java.UDF16;
 
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-@SuppressWarnings("serial")
-public class NameComparisonUDF implements UDF12<
+public class NameComparisonUDF implements UDF16<
         String, String, String, String, String, String, String, // Customer Input
-        String, String, String, String, String,                // TU Input
+        String, String, String, String, String, String, String, // TU Input
+        String, String,                                          // Soundex Input
         String[]> {
 
     @Override
     public String[] call(
             String custIpFirstName, String custIpPrefFirstName, String custIpFirstInitial,
             String custIpMiddleName, String custIpMiddleInitial, String custIpLastName, String custIpGenSuffix,
-            String tuFirstName, String tuPrefFirstName, String tuLastName, String tuMiddleName, String tuGenSuffix) {
-
-        // Derive Soundex Codes within the UDF
-        var custIpSndxFirstName = deriveSoundex(custIpFirstName);
-        var custIpSndxLastName = deriveSoundex(custIpLastName);
-        var tuSndxFirstName = deriveSoundex(tuFirstName);
-        var tuSndxLastName = deriveSoundex(tuLastName);
+            String tuFirstName, String tuPrefFirstName, String tuLastName, String tuMiddleName, String tuGenSuffix,
+            String custIpSndxFirstName, String custIpSndxLastName, String tuSndxFirstName, String tuSndxLastName) {
 
         // Initialize flags for match indicators
-        var fnMatch = compare(custIpFirstName, tuFirstName);
-        var prefFnMatch = "N".equals(fnMatch) ? comparePreferredNames(custIpPrefFirstName, tuPrefFirstName) : "I";
-        var sndxFnMatch = "N".equals(fnMatch) && "N".equals(prefFnMatch) ? compare(custIpSndxFirstName, tuSndxFirstName) : "I";
-        var finitMatch = "N".equals(fnMatch) && "N".equals(prefFnMatch) && "N".equals(sndxFnMatch)
+        String fnMatch = compare(custIpFirstName, tuFirstName);
+        String prefFnMatch = "N".equals(fnMatch) ? comparePreferredNames(custIpPrefFirstName, tuPrefFirstName) : "I";
+        String sndxFnMatch = "N".equals(fnMatch) && "N".equals(prefFnMatch) ? compare(custIpSndxFirstName, tuSndxFirstName) : "I";
+        String finitMatch = "N".equals(fnMatch) && "N".equals(prefFnMatch) && "N".equals(sndxFnMatch)
                 ? compareInitials(custIpFirstInitial, tuFirstName) : "I";
 
-        var mnMatch = compare(custIpMiddleName, tuMiddleName);
-        var minitMatch = "N".equals(mnMatch) ? compareInitials(custIpMiddleInitial, tuMiddleName) : "I";
+        String mnMatch = compare(custIpMiddleName, tuMiddleName);
+        String minitMatch = "N".equals(mnMatch) ? compareInitials(custIpMiddleInitial, tuMiddleName) : "I";
 
-        var lnMatch = compare(custIpLastName, tuLastName);
-        var sndxLnMatch = "N".equals(lnMatch) ? compare(custIpSndxLastName, tuSndxLastName) : "I";
-        var gensfxMatch = compare(custIpGenSuffix, tuGenSuffix);
+        String lnMatch = compare(custIpLastName, tuLastName);
+        String sndxLnMatch = "N".equals(lnMatch) ? compare(custIpSndxLastName, tuSndxLastName) : "I";
+        String gensfxMatch = compare(custIpGenSuffix, tuGenSuffix);
 
-        var fnRevslMatch = "N".equals(fnMatch) && "N".equals(prefFnMatch) && "N".equals(sndxFnMatch)
+        String fnRevslMatch = "N".equals(fnMatch) && "N".equals(prefFnMatch) && "N".equals(sndxFnMatch)
                 && "N".equals(finitMatch) && "N".equals(lnMatch) && "N".equals(sndxLnMatch)
                 ? compare(custIpLastName, tuFirstName) : "I";
-        var lnRevslMatch = "N".equals(fnMatch) && "N".equals(prefFnMatch) && "N".equals(sndxFnMatch)
+        String lnRevslMatch = "N".equals(fnMatch) && "N".equals(prefFnMatch) && "N".equals(sndxFnMatch)
                 && "N".equals(finitMatch) && "N".equals(lnMatch) && "N".equals(sndxLnMatch)
                 ? compare(custIpFirstName, tuLastName) : "I";
 
-        var prefFnRevslMatch = "N".equals(fnRevslMatch)
+        String prefFnRevslMatch = "N".equals(fnRevslMatch)
                 ? comparePreferredNames(custIpPrefFirstName, tuPrefFirstName) : "I";
-        var finitRevslMatch = "N".equals(fnRevslMatch) && "N".equals(prefFnRevslMatch)
+        String finitRevslMatch = "N".equals(fnRevslMatch) && "N".equals(prefFnRevslMatch)
                 ? compareInitials(custIpLastName, tuFirstName) : "I";
-        var sndxFnRevslMatch = "N".equals(fnRevslMatch) && "N".equals(prefFnRevslMatch)
+        String sndxFnRevslMatch = "N".equals(fnRevslMatch) && "N".equals(prefFnRevslMatch)
                 ? compare(custIpSndxLastName, tuSndxFirstName) : "I";
-        var sndxLnRevslMatch = "N".equals(lnRevslMatch)
+        String sndxLnRevslMatch = "N".equals(lnRevslMatch)
                 ? compare(custIpSndxFirstName, tuSndxLastName) : "I";
 
         // Generate MATCH_KEY
-        var matchKey = Stream.of(
+        String matchKey = Stream.of(
                 fnMatch, prefFnMatch, finitMatch, sndxFnMatch, mnMatch, minitMatch,
                 lnMatch, sndxLnMatch, fnRevslMatch, lnRevslMatch, prefFnRevslMatch,
                 finitRevslMatch, sndxFnRevslMatch, sndxLnRevslMatch
@@ -67,31 +62,6 @@ public class NameComparisonUDF implements UDF12<
                 prefFnRevslMatch, finitRevslMatch, sndxFnRevslMatch, sndxLnRevslMatch,
                 matchKey
         };
-    }
-
-    // Soundex Derivation
-    private String deriveSoundex(String name) {
-        if (name == null || name.isBlank()) {
-            return "";
-        }
-        var soundex = new StringBuilder().append(Character.toUpperCase(name.charAt(0)));
-        var mapping = "01230120022455012623010202".toCharArray();
-
-        for (var i = 1; i < name.length(); i++) {
-            var c = Character.toUpperCase(name.charAt(i));
-            if (c >= 'A' && c <= 'Z') {
-                var mapped = mapping[c - 'A'];
-                if (mapped != '0' && soundex.charAt(soundex.length() - 1) != mapped) {
-                    soundex.append(mapped);
-                }
-            }
-        }
-
-        while (soundex.length() < 4) {
-            soundex.append('0');
-        }
-
-        return soundex.substring(0, 4);
     }
 
     // Comparison utilities

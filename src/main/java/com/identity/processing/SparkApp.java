@@ -3,6 +3,7 @@ package com.identity.processing;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.spark.sql.functions;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
@@ -73,14 +74,23 @@ public class SparkApp {
         // Step 1: Cleanse and explode the data
         Dataset<Row> cleansedData = DataHygiene.cleanAndExplodeData(chunk);
         
+        // Load first name derivative file
+        Dataset<Row> firstnameDerivative = spark.read().parquet("firstname_derivative.csv");
+        
+        // Load preferred first names
+        Dataset<Row> enrichedData = enrichInputData(cleansedData, firstnameDerivative);
+        
         // Load index tables
-        Dataset<Row> emailIndex = spark.read().parquet("path_to_email_index");
-        Dataset<Row> phoneIndex = spark.read().parquet("path_to_phone_index");
-        Dataset<Row> maidIndex = spark.read().parquet("path_to_maid_index");
-        Dataset<Row> addressIndex = spark.read().parquet("path_to_address_index");
+//        Dataset<Row> emailIndex = spark.read().parquet("path_to_email_index");
+//        Dataset<Row> phoneIndex = spark.read().parquet("path_to_phone_index");
+//        Dataset<Row> maidIndex = spark.read().parquet("path_to_maid_index");
+//        Dataset<Row> addressIndex = spark.read().parquet("path_to_address_index");
+        Dataset<Row> partialDobIndex = spark.read().parquet("path_to_partial_dob_index");
+        Dataset<Row> fullDobIndex = spark.read().parquet("path_to_full_dob_index");
+        Dataset<Row> nameIndex = spark.read().parquet("path_to_name_index");
 
         // Step 2: Perform identity matching
-        Dataset<Row> matchedData = IdentityMatcher.performMatching(cleansedData, emailIndex, phoneIndex, maidIndex, addressIndex);
+        Dataset<Row> matchedData = IdentityMatcher.performMatching(enrichedData, partialDobIndex, fullDobIndex, nameIndex);
 
         // Step 3: Identify and assign best cluster IDs
         Dataset<Row> finalData = ClusterIdentifier.calculateBestClusters(chunk, matchedData);
@@ -106,5 +116,13 @@ public class SparkApp {
         }
 
         return combined;
+    }
+    
+    private static Dataset<Row> enrichInputData(Dataset<Row> inputData, Dataset<Row> firstnameDerivative) {
+        return inputData
+                .join(firstnameDerivative, inputData.col("First_Name").equalTo(firstnameDerivative.col("first_name")), "left")
+                .withColumn("preferred_first_name", firstnameDerivative.col("preferred_first_name"))
+                .withColumn("first_name_sndx", functions.callUDF("soundex", inputData.col("First_Name")))
+                .withColumn("last_name_sndx", functions.callUDF("soundex", inputData.col("Last_Name")));
     }
 }
