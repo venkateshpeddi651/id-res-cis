@@ -7,6 +7,9 @@ import org.apache.spark.sql.expressions.Window;
 import org.apache.spark.sql.expressions.WindowSpec;
 
 import static com.identity.processing.NameMatchKeyRankMap.matchKeyRankMap;
+import static com.identity.processing.constants.IndexKeys.*;
+
+import java.util.Map;
 
 /**
  * Implements identity matching logic using Spark DataFrames.
@@ -15,17 +18,22 @@ import static com.identity.processing.NameMatchKeyRankMap.matchKeyRankMap;
 public class IdentityMatcher {
 
     public static Dataset<Row> performMatching(Dataset<Row> clientData,
-                                               Dataset<Row> partialDobIndex,
-                                               Dataset<Row> fullDobIndex,
-                                               Dataset<Row> nameIndex) {
+                                               Map<String, Dataset<Row>> indexTables) {
         // Step 1: Name Dob Index 
-        Dataset<Row> nameDob = nameDoBIndex(clientData, partialDobIndex, fullDobIndex, nameIndex);
+        Dataset<Row> nameDob = nameDoBIndex(clientData, indexTables.get(PARTIAL_DOB_INDEX), 
+        									indexTables.get(FULL_DOB_INDEX),
+        									indexTables.get(NAME_INDEX));
 
-        
+        // Step 2: Name Email Index 
+        Dataset<Row> nameEmail = nameEmailIndex(clientData, indexTables.get(CLEAR_TEXT_EMAIL_INDEX), 
+											indexTables.get(MD5_EMAIL_INDEX),
+											indexTables.get(SHA1_EMAIL_INDEX),
+											indexTables.get(SHA256_EMAIL_INDEX),
+											indexTables.get(NAME_INDEX));
 
-        return nameDob;
+        return Utils.unionDatasets(nameDob, nameEmail);
     }
-
+                                                                                                                                                                                                                  
     private static Dataset<Row> nameDoBIndex(Dataset<Row> clientData,
                                                     Dataset<Row> partialDobIndex,
                                                     Dataset<Row> fullDobIndex,
@@ -38,16 +46,73 @@ public class IdentityMatcher {
     	Dataset<Row> nameRanks = assignNameRank(dobJoins, nameIndex);
     	
     	// Step3: Find best cluster based on name_rank & join_rank
-    	Dataset<Row> finalDobResult = findBestCluster(nameRanks);
+    	Dataset<Row> finalDobResult = findBestDobCluster(nameRanks);
     	
     	return finalDobResult;
     }
+    
+    private static Dataset<Row> nameEmailIndex(Dataset<Row> clientData,
+									            Dataset<Row> clearTextEmailIndex,
+									            Dataset<Row> md5EmailIndex,
+									            Dataset<Row> sha1EmailIndex,
+									            Dataset<Row> sha256EmailIndex,
+									            Dataset<Row> nameIndex) {
+    	// Step1 : 4 joins
+    	Dataset<Row> emailJoins = performEmailJoins(clientData, clearTextEmailIndex, md5EmailIndex, sha1EmailIndex, sha256EmailIndex);
+    	
+    	// Step2: perform name matching and assign name rank
+    	Dataset<Row> nameRanks = assignNameRank(emailJoins, nameIndex);
+    	
+    	// Step3: Find best cluster based on name_rank & join_rank
+    	Dataset<Row> finalEmailResult = findBestEmailCluster(nameRanks);
+    	
+    	return finalEmailResult;
+    }
+    
+	private static Dataset<Row> performEmailJoins(Dataset<Row> hygieneData, Dataset<Row> emailCleartextIndex,
+			Dataset<Row> emailMd5Index, Dataset<Row> emailSha1Index, Dataset<Row> emailSha256Index) {
+		Dataset<Row> cleartextJoin = hygieneData.filter(
+				"Email_Address_One IS NOT NULL AND First_Name IS NOT NULL AND Last_Name IS NOT NULL AND email_type = 'CLEAR_TEXT'")
+				.join(emailCleartextIndex,
+						hygieneData.col("Email_Address_One").equalTo(emailCleartextIndex.col("TU_email")), "inner");
 
-	private static Dataset<Row> findBestCluster(Dataset<Row> nameRanks) {
+		Dataset<Row> md5Join = hygieneData.filter(
+				"Email_Address_One IS NOT NULL AND First_Name IS NOT NULL AND Last_Name IS NOT NULL AND email_type = 'MD5'")
+				.join(emailMd5Index, hygieneData.col("Email_Address_One").equalTo(emailMd5Index.col("TU_email")),
+						"inner");
+
+		Dataset<Row> sha1Join = hygieneData.filter(
+				"Email_Address_One IS NOT NULL AND First_Name IS NOT NULL AND Last_Name IS NOT NULL AND email_type = 'SHA1'")
+				.join(emailSha1Index, hygieneData.col("Email_Address_One").equalTo(emailSha1Index.col("TU_email")),
+						"inner");
+
+		Dataset<Row> sha256Join = hygieneData.filter(
+				"Email_Address_One IS NOT NULL AND First_Name IS NOT NULL AND Last_Name IS NOT NULL AND email_type = 'SHA256'")
+				.join(emailSha256Index, hygieneData.col("Email_Address_One").equalTo(emailSha256Index.col("TU_email")),
+						"inner");
+
+		return cleartextJoin.union(md5Join).union(sha1Join).union(sha256Join);
+	}
+
+	private static Dataset<Row> findBestDobCluster(Dataset<Row> nameRanks) {
 		// Define the window partitioned by clusterId and ordered by rank
 	    WindowSpec windowSpec = Window.partitionBy("clusterId")
 	                                   .orderBy(functions.col("name_rank").asc(), 
 	                                            functions.col("name_dob_join_rank").asc());
+
+	    // Add a rank column to identify the best record for each clusterId
+	    Dataset<Row> rankedData = nameRanks.withColumn("rank", functions.row_number().over(windowSpec));
+
+	    // Filter only the best-ranked records
+	    Dataset<Row> result = rankedData.filter("rank = 1").drop("rank");
+
+	    return result;
+	}
+	
+	private static Dataset<Row> findBestEmailCluster(Dataset<Row> nameRanks) {
+		// Define the window partitioned by clusterId and ordered by rank
+	    WindowSpec windowSpec = Window.partitionBy("clusterId")
+	                                   .orderBy(functions.col("name_rank").asc());
 
 	    // Add a rank column to identify the best record for each clusterId
 	    Dataset<Row> rankedData = nameRanks.withColumn("rank", functions.row_number().over(windowSpec));

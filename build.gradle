@@ -29,12 +29,11 @@ dependencies {
     // Optional: Spark Streaming for real-time processing
     implementation 'org.apache.spark:spark-streaming_2.12:3.4.1'
 
-     // JUnit 5 API and Engine
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+      // JUnit 5 API for writing tests
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
 
-    // Optional: If you need to support legacy JUnit 4 tests
-    testImplementation 'junit:junit:4.13.2'
-    testRuntimeOnly 'org.junit.vintage:junit-vintage-engine:5.10.0'
+    // JUnit 5 Engine for running tests
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
 }
 
 java {
@@ -43,6 +42,6 @@ java {
     }
 }
 
-test {
+tasks.test {
     useJUnitPlatform()
 }

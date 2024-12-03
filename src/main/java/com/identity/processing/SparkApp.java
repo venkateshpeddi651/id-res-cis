@@ -1,12 +1,15 @@
 package com.identity.processing;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.spark.sql.functions;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
+import static com.identity.processing.constants.IndexKeys.*;
 
 /**
  * Main entry point for the Identity Matching Application.
@@ -81,16 +84,18 @@ public class SparkApp {
         Dataset<Row> enrichedData = enrichInputData(cleansedData, firstnameDerivative);
         
         // Load index tables
-//        Dataset<Row> emailIndex = spark.read().parquet("path_to_email_index");
-//        Dataset<Row> phoneIndex = spark.read().parquet("path_to_phone_index");
-//        Dataset<Row> maidIndex = spark.read().parquet("path_to_maid_index");
-//        Dataset<Row> addressIndex = spark.read().parquet("path_to_address_index");
-        Dataset<Row> partialDobIndex = spark.read().parquet("path_to_partial_dob_index");
-        Dataset<Row> fullDobIndex = spark.read().parquet("path_to_full_dob_index");
-        Dataset<Row> nameIndex = spark.read().parquet("path_to_name_index");
+        Map<String, Dataset<Row>> indexTables = new HashMap<>();
+        indexTables.put(CLEAR_TEXT_EMAIL_INDEX, spark.read().parquet("path_to_clear_text_email_index"));
+        indexTables.put(MD5_EMAIL_INDEX, spark.read().parquet("path_to_md5_index"));
+        indexTables.put(SHA1_EMAIL_INDEX, spark.read().parquet("path_to_sha1_email_index"));
+        indexTables.put(SHA256_EMAIL_INDEX, spark.read().parquet("path_to_sha256_email_index"));
+        indexTables.put(PARTIAL_DOB_INDEX, spark.read().parquet("path_to_partial_dob_index"));
+        indexTables.put(FULL_DOB_INDEX, spark.read().parquet("path_to_full_dob_index"));
+        indexTables.put(NAME_INDEX, spark.read().parquet("path_to_name_index"));
+        
 
         // Step 2: Perform identity matching
-        Dataset<Row> matchedData = IdentityMatcher.performMatching(enrichedData, partialDobIndex, fullDobIndex, nameIndex);
+        Dataset<Row> matchedData = IdentityMatcher.performMatching(enrichedData, indexTables);
 
         // Step 3: Identify and assign best cluster IDs
         Dataset<Row> finalData = ClusterIdentifier.calculateBestClusters(chunk, matchedData);
