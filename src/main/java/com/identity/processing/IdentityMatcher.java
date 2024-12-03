@@ -48,12 +48,8 @@ public class IdentityMatcher {
     	// Step3: Find best cluster based on name_rank & join_rank
     	Dataset<Row> finalDobResult = findBestDobCluster(nameRanks);
     	
-    	// Step 4: Add name_dob_hit_ind column
-        Dataset<Row> withHitIndicator = finalDobResult.withColumn("name_dob_hit_ind",
-                functions.when(functions.col("clusterId").isNotNull().and(functions.col("clusterId").notEqual("")), "Y")
-                        .otherwise("N"));
-
-        return withHitIndicator;
+    	// Step 4: Add name_dob_hit_ind 
+        return addHitIndicator(finalDobResult, "name_dob_hit_ind");
     }
     
     private static Dataset<Row> nameEmailIndex(Dataset<Row> clientData,
@@ -71,12 +67,20 @@ public class IdentityMatcher {
     	// Step3: Find best cluster based on name_rank & join_rank
     	Dataset<Row> finalEmailResult = findBestEmailCluster(nameRanks);
     	
-    	// Step 4: Add name_email_hit_ind column
-        Dataset<Row> withHitIndicator = finalEmailResult.withColumn("name_email_hit_ind",
+    	// Step 4: Add name_email_hit_ind 
+        return addHitIndicator(finalEmailResult, "name_email_hit_ind");
+    }
+    
+    private static Dataset<Row> addHitIndicator(Dataset<Row> data, String hitIndicatorColumn) {
+        // Add hit indicator
+        Dataset<Row> withHitIndicator = data.withColumn(hitIndicatorColumn,
                 functions.when(functions.col("clusterId").isNotNull().and(functions.col("clusterId").notEqual("")), "Y")
                         .otherwise("N"));
 
-        return withHitIndicator;
+        // Wipe out clusterId and set hit indicator to 'HR' for name_rank > 50
+        return withHitIndicator
+                .withColumn("clusterId", functions.when(functions.col("name_rank").leq(50), functions.col("clusterId")).otherwise(null))
+                .withColumn(hitIndicatorColumn, functions.when(functions.col("name_rank").leq(50), functions.col(hitIndicatorColumn)).otherwise("HR"));
     }
     
 	private static Dataset<Row> performEmailJoins(Dataset<Row> hygieneData, Dataset<Row> emailCleartextIndex,
