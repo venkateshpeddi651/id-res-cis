@@ -32,8 +32,11 @@ public class DataHygiene {
 
         // Step 5: Cleanse join columns
         Dataset<Row> cleansedData = cleanseJoinColumns(dobHygieneApplied);
+        
+        //Step 6: Derive Email type
+        Dataset<Row> result = deriveEmailType(cleansedData);
 
-        return cleansedData;
+        return result;
     }
 
     private static Dataset<Row> explodeArrayFields(Dataset<Row> data) {
@@ -136,6 +139,18 @@ public class DataHygiene {
                         "CASE WHEN Birth_Day rlike '^[0-9]+$' AND Birth_Day >= 1 AND Birth_Day <= 31 " +
                                 "THEN lpad(Birth_Day, 2, '0') ELSE NULL END"
                 ));
+    }
+    
+    private static Dataset<Row> deriveEmailType(Dataset<Row> data) {
+    	
+    	return data.withColumn("email_type",
+                functions.when(functions.col("Email_Address_One").contains("@")
+                        .and(functions.col("Email_Address_One").contains(".")),
+                "CLEAR_TEXT")
+                .when(functions.length(functions.col("Email_Address_One")).equalTo(32), "MD5")
+                .when(functions.length(functions.col("Email_Address_One")).equalTo(40), "SHA1")
+                .when(functions.length(functions.col("Email_Address_One")).equalTo(64), "SHA256")
+                .otherwise(null));
     }
 
     private static Dataset<Row> cleanseJoinColumns(Dataset<Row> data) {
