@@ -48,7 +48,12 @@ public class IdentityMatcher {
     	// Step3: Find best cluster based on name_rank & join_rank
     	Dataset<Row> finalDobResult = findBestDobCluster(nameRanks);
     	
-    	return finalDobResult;
+    	// Step 4: Add name_dob_hit_ind column
+        Dataset<Row> withHitIndicator = finalDobResult.withColumn("name_dob_hit_ind",
+                functions.when(functions.col("clusterId").isNotNull().and(functions.col("clusterId").notEqual("")), "Y")
+                        .otherwise("N"));
+
+        return withHitIndicator;
     }
     
     private static Dataset<Row> nameEmailIndex(Dataset<Row> clientData,
@@ -66,7 +71,12 @@ public class IdentityMatcher {
     	// Step3: Find best cluster based on name_rank & join_rank
     	Dataset<Row> finalEmailResult = findBestEmailCluster(nameRanks);
     	
-    	return finalEmailResult;
+    	// Step 4: Add name_email_hit_ind column
+        Dataset<Row> withHitIndicator = finalEmailResult.withColumn("name_email_hit_ind",
+                functions.when(functions.col("clusterId").isNotNull().and(functions.col("clusterId").notEqual("")), "Y")
+                        .otherwise("N"));
+
+        return withHitIndicator;
     }
     
 	private static Dataset<Row> performEmailJoins(Dataset<Row> hygieneData, Dataset<Row> emailCleartextIndex,
@@ -214,31 +224,4 @@ public class IdentityMatcher {
                         .orElse("ELSE 100")));
 	}
 	
-	private static Dataset<Row> filterByNameLevenshtein(Dataset<Row> data) {
-        // Add Levenshtein distance for Client First_Name to Index TU_FirstName
-        Dataset<Row> firstToFirstMatch = data.withColumn("levenshtein_score_first_first",
-                functions.expr("1 - levenshtein(First_Name, TU_FirstName) / greatest(length(First_Name), length(TU_FirstName))"));
-
-        // Add Levenshtein distance for Client Last_Name to Index TU_LastName
-        Dataset<Row> lastToLastMatch = firstToFirstMatch.withColumn("levenshtein_score_last_last",
-                functions.expr("1 - levenshtein(Last_Name, TU_LastName) / greatest(length(Last_Name), length(TU_LastName))"));
-
-        // Add Levenshtein distance for Client Last_Name to Index TU_FirstName
-        Dataset<Row> lastToFirstMatch = lastToLastMatch.withColumn("levenshtein_score_last_first",
-                functions.expr("1 - levenshtein(Last_Name, TU_FirstName) / greatest(length(Last_Name), length(TU_FirstName))"));
-
-        // Add Levenshtein distance for Client First_Name to Index TU_LastName
-        Dataset<Row> firstToLastMatch = lastToFirstMatch.withColumn("levenshtein_score_first_last",
-                functions.expr("1 - levenshtein(First_Name, TU_LastName) / greatest(length(First_Name), length(TU_LastName))"));
-
-        // Filter rows based on the condition:
-        // (levenshtein_score_first_first >= 0.8 AND levenshtein_score_last_last >= 0.8)
-        // OR (levenshtein_score_last_first >= 0.8 AND levenshtein_score_first_last >= 0.8)
-        Dataset<Row> filteredData = firstToLastMatch.filter(
-                "(levenshtein_score_first_first >= 0.8 AND levenshtein_score_last_last >= 0.8) " +
-                        "OR (levenshtein_score_last_first >= 0.8 AND levenshtein_score_first_last >= 0.8)"
-        );
-
-        return filteredData;
-    }
 }

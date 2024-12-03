@@ -22,7 +22,8 @@ public class Utils {
      * @param datasets Varargs of Dataset<Row> to union
      * @return Unified Dataset<Row>
      */
-    public static Dataset<Row> unionDatasets(Dataset<Row>... datasets) {
+    @SafeVarargs
+	public static Dataset<Row> unionDatasets(Dataset<Row>... datasets) {
         if (datasets == null || datasets.length == 0) {
             throw new IllegalArgumentException("No datasets provided for union");
         }
