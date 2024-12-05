@@ -33,11 +33,14 @@ public class DataHygiene {
 
         // Step 5: Apply DOB hygiene rules
         Dataset<Row> dobHygieneApplied = applyDOBHygieneRules(nameHygieneApplied);
+        
+        // Step 6: Apply address hygiene rules
+        Dataset<Row> addressHygieneApplied = applyAddressHygieneRules(dobHygieneApplied);
 
-        // Step 6: Cleanse join columns
-        Dataset<Row> cleansedData = cleanseJoinColumns(dobHygieneApplied);
+        // Step 7: Cleanse join columns
+        Dataset<Row> cleansedData = cleanseJoinColumns(addressHygieneApplied);
 
-        // Step 7: Derive Email type
+        // Step 8: Derive Email type
         Dataset<Row> result = deriveEmailType(cleansedData);
 
         return result;
@@ -50,36 +53,42 @@ public class DataHygiene {
      * @return Dataset with consolidated and deduplicated arrays for PII fields.
      */
     private static Dataset<Row> consolidateAndDeduplicatePIIFields(Dataset<Row> data) {
-        return data
-                // Combine email fields into a single array and deduplicate
-                .withColumn("Email_Array",
+    	return data
+                // Combine email fields into a single array, remove nulls, remove blanks, and deduplicate
+                .withColumn("Email_Adress_Array",
                         functions.array_distinct(
-                                functions.array(
-                                        data.col("Email_Address_One"),
-                                        data.col("Email_Address_Two"),
-                                        data.col("Email_Address_Three")
+                                functions.array_except(
+                                        functions.array(data.col("Email_Address_One"),
+                                                        data.col("Email_Address_Two"),
+                                                        data.col("Email_Address_Three")),
+                                        functions.lit(new String[]{null, ""}) // Remove null and empty string
                                 )
-                        ))
+                        )
+                )
 
-                // Combine phone fields into a single array and deduplicate
-                .withColumn("Phone_Array",
+                // Combine phone fields into a single array, remove nulls, remove blanks, and deduplicate
+                .withColumn("Phone_Number_Array",
                         functions.array_distinct(
-                                functions.array(
-                                        data.col("Phone_Number_One"),
-                                        data.col("Phone_Number_Two"),
-                                        data.col("Phone_Number_Three")
+                                functions.array_except(
+                                        functions.array(data.col("Phone_Number_One"),
+                                                        data.col("Phone_Number_Two"),
+                                                        data.col("Phone_Number_Three")),
+                                        functions.lit(new String[]{null, ""}) // Remove null and empty string
                                 )
-                        ))
+                        )
+                )
 
-                // Combine MAID fields into a single array and deduplicate
-                .withColumn("MAID_Array",
+                // Combine MAID fields into a single array, remove nulls, remove blanks, and deduplicate
+                .withColumn("MAID_and_MAID_Type_Array",
                         functions.array_distinct(
-                                functions.array(
-                                        data.col("MAID_One"),
-                                        data.col("MAID_Two"),
-                                        data.col("MAID_Three")
+                                functions.array_except(
+                                        functions.array(data.col("MAID_One"),
+                                                        data.col("MAID_Two"),
+                                                        data.col("MAID_Three")),
+                                        functions.lit(new String[]{null, ""}) // Remove null and empty string
                                 )
-                        ));
+                        )
+                );
     }
 
     /**
@@ -170,4 +179,93 @@ public class DataHygiene {
                 .withColumn("MAID_One", functions.trim(data.col("MAID_One")))
                 .withColumn("ZIP_Code", functions.regexp_replace(data.col("ZIP_Code"), "[^0-9]", ""));
     }
+    
+    /**
+     * Applies address hygiene rules to clean and normalize address-related fields.
+     *
+     * @param data Input dataset.
+     * @return Dataset with cleansed address fields.
+     */
+    private static Dataset<Row> applyAddressHygieneRules(Dataset<Row> data) {
+        // Predefine reusable patterns for regex replacements
+        String nonAlphanumericStreetPattern = "[^a-zA-Z0-9 #/\\-]";
+        String repeatedSpecialCharsPattern = "(\\s|[#/\\-]){2,}";
+        String nonAlphaCityPattern = "[^a-zA-Z \\-]";
+        String repeatedCitySpecialCharsPattern = "(\\s|\\-){2,}";
+
+        // Define static list of valid US state codes
+        String[] validStateCodes = {
+                "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+                "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+                "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+                "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+                "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+        };
+
+        return data
+                // Process Street_Name
+                .withColumn("Street_Name", functions.expr(
+                        "CASE WHEN Street_Name IS NOT NULL THEN " +
+                                "CASE WHEN Street_Name rlike '[a-zA-Z0-9]' THEN " +
+                                "regexp_replace(regexp_replace(trim(Street_Name), '" + nonAlphanumericStreetPattern + "', ''), '" + repeatedSpecialCharsPattern + "', ' ') " +
+                                "ELSE NULL END " +
+                                "ELSE NULL END"
+                ))
+
+                // Process Street_Address_Line_1
+                .withColumn("Street_Address_Line_1", functions.expr(
+                        "CASE WHEN Street_Address_Line_1 IS NOT NULL THEN " +
+                                "CASE WHEN Street_Address_Line_1 rlike '[a-zA-Z0-9]' THEN " +
+                                "regexp_replace(regexp_replace(trim(Street_Address_Line_1), '" + nonAlphanumericStreetPattern + "', ''), '\\s{2,}', ' ') " +
+                                "ELSE NULL END " +
+                                "ELSE NULL END"
+                ))
+
+                // Process House_Number
+                .withColumn("House_Number", functions.expr(
+                        "CASE WHEN House_Number IS NOT NULL THEN " +
+                                "CASE WHEN House_Number rlike '[a-zA-Z0-9]' THEN " +
+                                "regexp_replace(regexp_replace(trim(House_Number), '" + nonAlphanumericStreetPattern + "', ''), '" + repeatedSpecialCharsPattern + "', ' ') " +
+                                "ELSE NULL END " +
+                                "ELSE NULL END"
+                ))
+
+                // Process Unit_Number
+                .withColumn("Unit_Number", functions.expr(
+                        "CASE WHEN Unit_Number IS NOT NULL THEN " +
+                                "CASE WHEN Unit_Number rlike '[a-zA-Z0-9]' THEN regexp_replace(trim(Unit_Number), '[^a-zA-Z0-9]', '') " +
+                                "ELSE NULL END " +
+                                "ELSE NULL END"
+                ))
+
+                // Process City
+                .withColumn("City", functions.expr(
+                        "CASE WHEN City IS NOT NULL THEN " +
+                                "CASE WHEN City rlike '[a-zA-Z]' THEN " +
+                                "regexp_replace(regexp_replace(trim(City), '" + nonAlphaCityPattern + "', ''), '" + repeatedCitySpecialCharsPattern + "', ' ') " +
+                                "ELSE NULL END " +
+                                "ELSE NULL END"
+                ))
+
+                // Process State with static valid state codes
+                .withColumn("State", functions.when(
+                        functions.array_contains(functions.lit(validStateCodes), functions.col("State")),
+                        functions.col("State")
+                ).otherwise((String) null))
+
+                // Process Street_Type, Unit_Type, Post_Directional, Pre_Directional
+                .withColumn("Street_Type", functions.expr(
+                        "CASE WHEN Street_Type IS NOT NULL THEN regexp_replace(trim(Street_Type), '[^a-zA-Z]', '') ELSE NULL END"
+                ))
+                .withColumn("Unit_Type", functions.expr(
+                        "CASE WHEN Unit_Type IS NOT NULL THEN regexp_replace(trim(Unit_Type), '[^a-zA-Z]', '') ELSE NULL END"
+                ))
+                .withColumn("Post_Directional", functions.expr(
+                        "CASE WHEN Post_Directional IS NOT NULL THEN regexp_replace(trim(Post_Directional), '[^a-zA-Z]', '') ELSE NULL END"
+                ))
+                .withColumn("Pre_Directional", functions.expr(
+                        "CASE WHEN Pre_Directional IS NOT NULL THEN regexp_replace(trim(Pre_Directional), '[^a-zA-Z]', '') ELSE NULL END"
+                ));
+    }
+
 }
