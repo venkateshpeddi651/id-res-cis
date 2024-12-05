@@ -1,10 +1,22 @@
 package com.identity.processing;
 
-import org.apache.spark.sql.Dataset;
-import org.apache.spark.sql.Row;
-import org.apache.spark.sql.functions;
-
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.apache.spark.api.java.function.MapPartitionsFunction;
+import org.apache.spark.broadcast.Broadcast;
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Encoder;
+import org.apache.spark.sql.Encoders;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.RowFactory;
+import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.functions;
 
 /**
  * Cleans, normalizes, deduplicates, and explodes PII fields in the dataset.
@@ -129,15 +141,90 @@ public class DataHygiene {
         return data.withColumn("Generated_Record_ID", functions.expr("uuid()"));
     }
 
+    
     private static Dataset<Row> applyNameHygieneRules(Dataset<Row> data) {
+        String cleanNameRegex = "[^a-zA-Z ]";
+        String suffixRegex = "( Jr| Sr| II| III| IV| V)$";
+
+        Map<String, Integer[]> nameFormatMapping = new HashMap<>();
+        nameFormatMapping.put("F", new Integer[]{0, null, null});
+        nameFormatMapping.put("FL", new Integer[]{0, null, 1});
+        nameFormatMapping.put("FML", new Integer[]{0, 1, 2});
+        // Add other mappings...
+
+        Broadcast<Map<String, Integer[]>> broadcastMapping = SparkSession.active().sparkContext()
+                .broadcast(nameFormatMapping, scala.reflect.ClassTag$.MODULE$.apply(Map.class));
+
+        // Encoder for the resulting Dataset<Row>
+        Encoder<Row> rowEncoder = Encoders.bean(Row.class);
+
         return data
-                .withColumn("First_Name", functions.trim(functions.regexp_replace(functions.col("First_Name"), "[^a-zA-Z ]", "")))
-                .withColumn("Middle_Name", functions.trim(functions.regexp_replace(functions.col("Middle_Name"), "[^a-zA-Z ]", "")))
-                .withColumn("Last_Name", functions.trim(functions.expr("regexp_replace(Last_Name, '( Jr| Sr| II| III| IV| V)$', '')")))
-                .withColumn("Gen_Suffix", functions.expr(
-                        "CASE WHEN Last_Name rlike '( Jr| Sr| II| III| IV| V)$' THEN regexp_extract(Last_Name, '( Jr| Sr| II| III| IV| V)$', 1) ELSE NULL END"
-                ));
+                .withColumn("parsed_name_array", functions.when(
+                        functions.col("Unparsed_Name").isNotNull(),
+                        functions.split(functions.col("Unparsed_Name"), " ")
+                ).otherwise(functions.lit(null)))
+                .mapPartitions((MapPartitionsFunction<Row, Row>) rows -> {
+                    Map<String, Integer[]> mapping = broadcastMapping.value();
+                    List<Row> processedRows = new ArrayList<>();
+
+                    while (rows.hasNext()) {
+                        Row row = rows.next();
+                        String format = row.getAs("Unparsed_Name_Format");
+                        List<String> parsedArray = row.getList(row.fieldIndex("parsed_name_array"));
+                        String firstName = null, middleName = null, lastName = null;
+
+                        if (format != null && parsedArray != null && mapping.containsKey(format)) {
+                            Integer[] indices = mapping.get(format);
+
+                            // Assign names dynamically based on indices
+                            if (indices.length >= 2) {
+                                firstName = indices[0] != null && indices[0] < parsedArray.size() ? parsedArray.get(indices[0]) : null;
+                                lastName = indices[2] != null && indices[2] < parsedArray.size() ? parsedArray.get(indices[2]) : null;
+                            }
+                            if (indices.length == 3) {
+                                middleName = indices[1] != null && indices[1] < parsedArray.size() ? parsedArray.get(indices[1]) : null;
+                            }
+                        }
+
+                        // Add cleaned names and suffix extraction
+                        processedRows.add(RowFactory.create(
+                                cleanName(firstName, cleanNameRegex),     // Cleaned First_Name
+                                cleanName(middleName, cleanNameRegex),   // Cleaned Middle_Name
+                                cleanName(lastName, cleanNameRegex),     // Cleaned Last_Name
+                                extractSuffix(lastName, suffixRegex)     // Extracted Generational Suffix
+                        ));
+                    }
+                    return processedRows.iterator();
+                }, rowEncoder); // Specify the encoder to remove ambiguity
     }
+
+
+    /**
+     * Helper method to clean names by removing invalid characters.
+     *
+     * @param name  The input name string.
+     * @param regex The regex for removing unwanted characters.
+     * @return The cleaned name string.
+     */
+    private static String cleanName(String name, String regex) {
+        return name == null ? null : name.replaceAll(regex, "").trim();
+    }
+
+    /**
+     * Helper method to extract generational suffix from a name.
+     *
+     * @param lastName The input last name string.
+     * @param regex    The regex for extracting the suffix.
+     * @return The extracted generational suffix, or null if not found.
+     */
+    private static String extractSuffix(String lastName, String regex) {
+        if (lastName == null) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile(regex).matcher(lastName);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
 
     private static Dataset<Row> applyDOBHygieneRules(Dataset<Row> data) {
         LocalDate currentDate = LocalDate.now();
