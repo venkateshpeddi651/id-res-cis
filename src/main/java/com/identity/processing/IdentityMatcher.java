@@ -1,6 +1,7 @@
 package com.identity.processing;
 
 import org.apache.spark.sql.Dataset;
+
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.functions;
 import org.apache.spark.sql.expressions.Window;
@@ -8,6 +9,7 @@ import org.apache.spark.sql.expressions.WindowSpec;
 
 import static com.identity.processing.NameMatchKeyRankMap.matchKeyRankMap;
 import static com.identity.processing.constants.IndexKeys.*;
+import static org.apache.spark.sql.functions.col;
 
 import java.util.Map;
 
@@ -30,8 +32,11 @@ public class IdentityMatcher {
 											indexTables.get(SHA1_EMAIL_INDEX),
 											indexTables.get(SHA256_EMAIL_INDEX),
 											indexTables.get(NAME_INDEX));
+        // Step 3: Name Address Index 
+        Dataset<Row> nameAddress = nameAddressIndex(clientData, indexTables.get(NAME_ADDRESS_INDEX),
+        									indexTables.get(NAME_INDEX));
 
-        return Utils.unionDatasets(nameDob, nameEmail);
+        return Utils.unionDatasets(nameDob, nameEmail, nameAddress);
     }
                                                                                                                                                                                                                   
     private static Dataset<Row> nameDoBIndex(Dataset<Row> clientData,
@@ -65,11 +70,68 @@ public class IdentityMatcher {
     	Dataset<Row> nameRanks = assignNameRank(emailJoins, nameIndex);
     	
     	// Step3: Find best cluster based on name_rank & join_rank
-    	Dataset<Row> finalEmailResult = findBestEmailCluster(nameRanks);
+    	Dataset<Row> finalEmailResult = findBestCluster(nameRanks);
     	
     	// Step 4: Add name_email_hit_ind 
         return addHitIndicator(finalEmailResult, "name_email_hit_ind");
     }
+    
+    private static Dataset<Row> nameAddressIndex(Dataset<Row> clientData, Dataset<Row> nameAddressIndex, Dataset<Row> nameIndex) {
+        // Step 1: Perform joins
+        Dataset<Row> nameAddressJoins = performNameAddressJoins(clientData, nameAddressIndex);
+
+        // Step 2: Assign name rank
+        Dataset<Row> nameRanks = assignNameRank(nameAddressJoins, nameIndex);
+
+        // Step 3: Find the best cluster
+        Dataset<Row> bestCluster = findBestCluster(nameRanks);
+
+        // Step 4: Add hit indicator
+        return addHitIndicator(bestCluster, "name_address_hit_ind");
+    }
+    
+    private static Dataset<Row> performNameAddressJoins(Dataset<Row> clientData, Dataset<Row> nameAddressIndex) {
+        // Apply the common filter upfront
+        Dataset<Row> filteredClientData = clientData.filter(
+                "ZIP_Code IS NOT NULL AND House_Number IS NOT NULL AND Street_Name IS NOT NULL");
+
+        // Partitioning or bucketing on ZIP_Code to reduce shuffle
+        Dataset<Row> partitionedNameAddressIndex = nameAddressIndex.repartition(col("TU_Zip"));
+
+        // Join 1: ZIP_Code + House_Number + first 5 chars of Street_Name + 1st letter of First_Name
+        Dataset<Row> join1 = filteredClientData.filter("First_Name IS NOT NULL")
+                .join(partitionedNameAddressIndex,
+                        col("ZIP_Code").equalTo(col("TU_Zip"))
+                                .and(col("House_Number").equalTo(col("TU_houseNumber")))
+                                .and(functions.substring(col("Street_Name"), 1, 5).equalTo(functions.substring(col("TU_streetName"), 1, 5)))
+                                .and(functions.substring(col("First_Name"), 1, 1).equalTo(col("TU_firstname"))),
+                        "inner")
+                .select("clientData.*", "nameAddressIndex.clusterId");
+
+        // Join 2: ZIP_Code + House_Number + first 5 chars of Street_Name + 1st letter of Last_Name
+        Dataset<Row> join2 = filteredClientData.filter("Last_Name IS NOT NULL")
+                .join(partitionedNameAddressIndex,
+                        col("ZIP_Code").equalTo(col("TU_Zip"))
+                                .and(col("House_Number").equalTo(col("TU_houseNumber")))
+                                .and(functions.substring(col("Street_Name"), 1, 5).equalTo(functions.substring(col("TU_streetName"), 1, 5)))
+                                .and(functions.substring(col("Last_Name"), 1, 1).equalTo(col("TU_lastname"))),
+                        "inner")
+                .select("clientData.*", "nameAddressIndex.clusterId");
+
+        // Join 3: ZIP_Code + House_Number + first 5 chars of Street_Name + 1st letter of First_Name matches 1st letter of TU_Last_Name
+        Dataset<Row> join3 = filteredClientData.filter("First_Name IS NOT NULL")
+                .join(partitionedNameAddressIndex,
+                        col("ZIP_Code").equalTo(col("TU_Zip"))
+                                .and(col("House_Number").equalTo(col("TU_houseNumber")))
+                                .and(functions.substring(col("Street_Name"), 1, 5).equalTo(functions.substring(col("TU_streetName"), 1, 5)))
+                                .and(functions.substring(col("First_Name"), 1, 1).equalTo(col("TU_lastname"))),
+                        "inner")
+                .select("clientData.*", "nameAddressIndex.clusterId");
+
+        // Union all joins and deduplicate
+        return join1.union(join2).union(join3).distinct();
+    }
+
     
     private static Dataset<Row> addHitIndicator(Dataset<Row> data, String hitIndicatorColumn) {
         // Add hit indicator
@@ -123,7 +185,7 @@ public class IdentityMatcher {
 	    return result;
 	}
 	
-	private static Dataset<Row> findBestEmailCluster(Dataset<Row> nameRanks) {
+	private static Dataset<Row> findBestCluster(Dataset<Row> nameRanks) {
 		// Define the window partitioned by clusterId and ordered by rank
 	    WindowSpec windowSpec = Window.partitionBy("clusterId")
 	                                   .orderBy(functions.col("name_rank").asc());

@@ -1,46 +1,90 @@
 package com.identity.processing;
 
+import com.identity.processing.constants.MatchConstants;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.functions;
 
+import java.util.Map;
+
 /**
- * Identifies the best cluster IDs and ensures 1:1 mapping for input records.
+ * Identifies the best cluster IDs, calculates weights, handles conflicts, and merges records.
  */
 public class ClusterIdentifier {
 
     /**
-     * Groups clusters by `Unique_ID`, resolves the best cluster ID, and joins back with original data.
+     * Resolves the best cluster ID for each record based on match weights and handles conflicts.
      *
-     * @param originalData Original client dataset (before transformations).
-     * @param matchedData  Dataset with matched records and calculated cluster IDs.
-     * @return Dataset with the best cluster ID joined back with the original data.
+     * @param matchedData Dataset with matched records containing `match_type`, `match_level`, and `clusterId`.
+     * @return Dataset with resolved `final_cluster_id` and conflict handling.
      */
-    public static Dataset<Row> calculateBestClusters(Dataset<Row> originalData, Dataset<Row> matchedData) {
-        // Add index weights
+    public static Dataset<Row> calculateBestClusters(Dataset<Row> matchedData) {
+        // Step 1: Add weight column based on MatchType and MatchLevel
         Dataset<Row> weightedData = matchedData.withColumn(
                 "weight",
-                functions.expr("case when index_type = 'Name_Address_Index' then 20 " +
-                               "when index_type = 'Email_Index' then 10 " +
-                               "when index_type = 'Phone_Index' then 10 " +
-                               "when index_type = 'MAID_Index' then 15 " +
-                               "when index_type = 'DOB_Index' then 12 end")
+                functions.expr(buildDynamicCaseExpression("match_type", MatchConstants.MATCH_TYPE_WEIGHTS))
+                        .plus(functions.expr(buildDynamicCaseExpression("match_level", MatchConstants.MATCH_LEVEL_WEIGHTS)))
         );
 
-        // Resolve to 1 record per Unique_ID by selecting the best match
-        Dataset<Row> deduplicatedData = weightedData.groupBy("Unique_ID")
+        // Step 2: Calculate Match Count for each record
+        Dataset<Row> withMatchCount = weightedData.groupBy("Unique_ID")
                 .agg(
-                        functions.first("Unique_ID").alias("client_rec_id"), // Alias for clarity
-                        functions.first("Generated_Record_ID").alias("Generated_Record_ID"),
-                        functions.max("weight").alias("max_weight"),
-                        functions.first("clusterId").alias("best_cluster_id"),
-                        functions.max("levenshtein_score").alias("best_levenshtein_score")
+                        functions.collect_list("match_type").alias("match_types"),
+                        functions.collect_list("clusterId").alias("cluster_ids"),
+                        functions.sum("weight").alias("total_weight"),
+                        functions.size(functions.collect_list("match_type")).alias("Match_Count")
                 );
 
-        // Join back with original data to ensure full context
-        Dataset<Row> finalOutput = originalData.join(deduplicatedData, "Unique_ID")
-                .withColumn("final_cluster_id", functions.col("best_cluster_id"));
+        // Step 3: Resolve final_cluster_id and handle conflicts
+        Dataset<Row> resolvedData = withMatchCount
+                .withColumn(
+                        "final_cluster_id",
+                        functions.when(
+                                functions.size(functions.col("cluster_ids")).equalTo(1),
+                                functions.col("cluster_ids").getItem(0)
+                        ).otherwise(null) // Blank for conflicts
+                )
+                .withColumn(
+                        "indicator",
+                        functions.when(
+                                functions.size(functions.col("cluster_ids")).gt(1),
+                                "I" // Set indicator to 'I' for conflicts
+                        ).otherwise(null)
+                );
 
-        return finalOutput;
+        // Step 4: Merge records with multiple cluster IDs
+        Dataset<Row> mergedData = resolvedData
+                .withColumn(
+                        "final_cluster_id",
+                        functions.when(
+                                functions.col("indicator").equalTo("I"),
+                                null
+                        ).otherwise(functions.col("final_cluster_id"))
+                );
+
+        return mergedData;
     }
+
+    /**
+     * Dynamically builds a CASE expression for Spark SQL based on a mapping.
+     *
+     * @param column Name of the column to check.
+     * @param mapping Map containing values and their corresponding weights.
+     * @return CASE expression as a String.
+     */
+    private static String buildDynamicCaseExpression(String column, Map<String, Integer> mapping) {
+        StringBuilder caseExpression = new StringBuilder("CASE ");
+        for (Map.Entry<String, Integer> entry : mapping.entrySet()) {
+            caseExpression.append("WHEN ")
+                    .append(column)
+                    .append(" = '")
+                    .append(entry.getKey())
+                    .append("' THEN ")
+                    .append(entry.getValue())
+                    .append(" ");
+        }
+        caseExpression.append("ELSE 0 END");
+        return caseExpression.toString();
+    }
+
 }

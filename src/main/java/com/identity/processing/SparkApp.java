@@ -92,13 +92,13 @@ public class SparkApp {
         indexTables.put(PARTIAL_DOB_INDEX, spark.read().parquet("path_to_partial_dob_index"));
         indexTables.put(FULL_DOB_INDEX, spark.read().parquet("path_to_full_dob_index"));
         indexTables.put(NAME_INDEX, spark.read().parquet("path_to_name_index"));
-        
+        indexTables.put(NAME_ADDRESS_INDEX, spark.read().parquet("path_to_name_address_index"));
 
         // Step 2: Perform identity matching
         Dataset<Row> matchedData = IdentityMatcher.performMatching(enrichedData, indexTables);
 
         // Step 3: Identify and assign best cluster IDs
-        Dataset<Row> finalData = ClusterIdentifier.calculateBestClusters(chunk, matchedData);
+        Dataset<Row> finalData = ClusterIdentifier.calculateBestClusters(matchedData);
 
         return finalData;
     }

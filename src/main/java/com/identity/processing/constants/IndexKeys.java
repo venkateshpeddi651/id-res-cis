@@ -8,5 +8,6 @@ public class IndexKeys {
     public static final String PARTIAL_DOB_INDEX = "partialDobIndex";
     public static final String FULL_DOB_INDEX = "fullDobIndex";
     public static final String NAME_INDEX = "nameIndex";
+    public static final String NAME_ADDRESS_INDEX = "nameAddressIndex";
     // Add more keys here as needed
 }
