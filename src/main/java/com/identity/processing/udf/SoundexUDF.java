@@ -1,92 +1,75 @@
 package com.identity.processing.udf;
 
 import org.apache.spark.sql.api.java.UDF1;
-import org.apache.spark.sql.types.DataTypes;
 
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
-public class SoundexUDF {
+public class SoundexUDF implements UDF1<String, String> {
 
-    // Predefined maps for five-bit and four-bit conversions
     private static final Map<Character, Integer> fiveBitConversion = new HashMap<>();
     private static final Map<Character, Integer> fourBitConversion = new HashMap<>();
 
     static {
-        // Populate conversion maps based on the Ab Initio logic
-        // Example initialization (fill in with actual mapping logic from your business rules)
-        fiveBitConversion.put('A', 1); // Example
-        fiveBitConversion.put('B', 2); // Example
-        // Populate all other characters
+        // Initialize the five-bit conversion table
+        fiveBitConversion.put('A', 1);
+        fiveBitConversion.put('B', 2);
+        // Populate all other characters for five-bit conversion
+        fiveBitConversion.put('M', 12); // For `M` as per Ab Initio logic
 
-        fourBitConversion.put('A', 1); // Example
-        fourBitConversion.put('B', 2); // Example
-        // Populate all other characters
+        // Initialize the four-bit conversion table
+        fourBitConversion.put('A', 1);
+        fourBitConversion.put('B', 2);
+        fourBitConversion.put('R', 10); // Example: Corresponds to `A` in hex
+        fourBitConversion.put('L', 7);
+        fourBitConversion.put('Y', 1);
+        fourBitConversion.put('N', 8);
+        fourBitConversion.put('D', 4);
+        // Populate the rest of the alphabet
     }
 
-    public static UDF1<String, String> soundexUDF() {
-        return (String input) -> {
-            if (input == null || input.isEmpty()) {
-                return null;
+    @Override
+    public String call(String input) throws Exception {
+        if (input == null || input.isEmpty()) {
+            return null;
+        }
+
+        // Filter and uppercase
+        String filteredInput = input.replaceAll("[^a-zA-Z]", "").toUpperCase();
+        if (filteredInput.isEmpty()) {
+            return null;
+        }
+
+        int soundex = 0;
+        int letterCount = 0;
+
+        // First two letters -> Five-bit conversion
+        if (filteredInput.length() > 1) {
+            char firstChar = filteredInput.charAt(0);
+            char secondChar = filteredInput.charAt(1);
+            soundex |= fiveBitConversion.getOrDefault(firstChar, 0) << 5;
+            soundex |= fiveBitConversion.getOrDefault(secondChar, 0);
+            letterCount += 2;
+        }
+
+        // Remaining letters -> Four-bit conversion
+        for (int i = 2; i < filteredInput.length(); i++) {
+            char currentChar = filteredInput.charAt(i);
+            int fourBitCode = fourBitConversion.getOrDefault(currentChar, 0);
+
+            if (letterCount < 6) {
+                soundex = (soundex << 4) | fourBitCode;
+                letterCount++;
             }
+        }
 
-            // Step 1: Filter out invalid characters
-            String filteredInput = input.replaceAll("[^a-zA-Z]", "").toUpperCase();
-            if (filteredInput.isEmpty()) {
-                return null;
-            }
+        // Padding to 8 characters
+        while (letterCount < 6) {
+            soundex = soundex << 4;
+            letterCount++;
+        }
 
-            // Step 2: Convert to character array
-            char[] inputChars = filteredInput.toCharArray();
-            int inputLength = inputChars.length;
-
-            // Step 3: Handle short names
-            if (inputLength == 1) {
-                Integer firstByte = fiveBitConversion.getOrDefault(inputChars[0], 0);
-                return String.format("%08x", firstByte << 25); // Pad to 25 bits
-            }
-
-            // Step 4: Conversion logic for longer names
-            int g2Soundex = 0;
-            Integer firstByte = fiveBitConversion.getOrDefault(inputChars[0], 0);
-            Integer secondByte = fiveBitConversion.getOrDefault(inputChars[1], 0);
-            Integer prevValue = fourBitConversion.getOrDefault(inputChars[1], 0);
-
-            g2Soundex = (firstByte << 5) | secondByte; // Add first two 5-bit codes
-
-            int letterCount = 2;
-            int tempValue = 0;
-
-            for (int i = 2; i < inputLength; i++) {
-                tempValue = fourBitConversion.getOrDefault(inputChars[i], 0);
-
-                if (tempValue != prevValue) { // Skip duplicates
-                    g2Soundex = (g2Soundex << 4) | tempValue;
-                    letterCount++;
-                    prevValue = tempValue;
-                }
-
-                // Handle truncation logic for 1 and 3
-                if (letterCount > 3 && (tempValue == 1 || tempValue == 3)) {
-                    g2Soundex >>= 4; // Remove last code
-                    letterCount--;
-                }
-            }
-
-            // Padding to ensure at least 6 characters
-            for (int i = letterCount; i < 6; i++) {
-                g2Soundex <<= 4; // Add padding
-            }
-
-            // Append extra characters count
-            if (letterCount > 6) {
-                int extraChars = Math.min(9, letterCount - 6);
-                g2Soundex = (g2Soundex << 4) | extraChars;
-            }
-
-            // Convert to little-endian hex representation
-            return String.format("%08x", g2Soundex);
-        };
+        // Convert to 8-character hexadecimal
+        return String.format("%08X", soundex);
     }
 }
