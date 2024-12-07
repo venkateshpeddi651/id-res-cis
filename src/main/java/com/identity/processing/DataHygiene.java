@@ -66,20 +66,34 @@ public class DataHygiene {
      */
     private static Dataset<Row> consolidateAndDeduplicatePIIFields(Dataset<Row> data) {
     	return data
-                // Combine email fields into a single array, remove nulls, remove blanks, and deduplicate
-    			// Add index for Email_Address_One, Two, and Three
-    			// Add indices for elements in Email_Adress_Array starting from 4
-                .withColumn("Email_Adress_Array_With_Index",
-                        functions.expr(
-                                "ARRAY_DISTINCT(FILTER(" +
-                                        "TRANSFORM(" +
-                                        "   array(named_struct('index', 1, 'email', Email_Address_One), " +
-                                        "         named_struct('index', 2, 'email', Email_Address_Two), " +
-                                        "         named_struct('index', 3, 'email', Email_Address_Three))" +
-                                        "   || IFNULL(TRANSFORM(Email_Adress_Array, (e, i) -> named_struct('index', i + 4, 'email', e)), array())," +
-                                        "   x -> x.email IS NOT NULL AND x.email != ''" +
-                                        "), y -> y IS NOT NULL))"))
-                .drop("Email_Address_One", "Email_Address_Two", "Email_Address_Three", "Email_Adress_Array")
+                // Generate indices for individual email fields
+                .withColumn("Email_One_Struct", functions.when(
+                        functions.col("Email_Address_One").isNotNull().and(functions.col("Email_Address_One").notEqual("")),
+                        functions.struct(functions.lit("1").alias("index"), functions.col("Email_Address_One").alias("email"))
+                ))
+                .withColumn("Email_Two_Struct", functions.when(
+                        functions.col("Email_Address_Two").isNotNull().and(functions.col("Email_Address_Two").notEqual("")),
+                        functions.struct(functions.lit("2").alias("index"), functions.col("Email_Address_Two").alias("email"))
+                ))
+                .withColumn("Email_Three_Struct", functions.when(
+                        functions.col("Email_Address_Three").isNotNull().and(functions.col("Email_Address_Three").notEqual("")),
+                        functions.struct(functions.lit("3").alias("index"), functions.col("Email_Address_Three").alias("email"))
+                ))
+
+                // Generate indexed structs for elements in Email_Adress_Array starting from 4
+                .withColumn("Indexed_Email_Array", functions.expr(
+                        "transform(Email_Address_Array, (email, idx) -> struct(idx + 4 as index, email as email))"
+                ))
+
+                // Combine all email fields into a single array and deduplicate
+                .withColumn("Email_Address_Array_With_Index", functions.array_distinct(functions.flatten(functions.array(
+                        functions.array(functions.col("Email_One_Struct"), functions.col("Email_Two_Struct"), functions.col("Email_Three_Struct")),
+                        functions.coalesce(functions.col("Indexed_Email_Array"), functions.array())
+                ))))
+
+                // Drop intermediate columns
+                .drop("Email_One_Struct", "Email_Two_Struct", "Email_Three_Struct", "Indexed_Email_Array")
+    
                 
                 // Add index for Phone_Number_One, Two, and Three
     			// Add indices for elements in Phone_Number_Array starting from 4
@@ -117,13 +131,22 @@ public class DataHygiene {
     private static Dataset<Row> explodeArrayFields(Dataset<Row> data) {
     	
 		// Explode Email_Array
-		Dataset<Row> emailExploded = data
-				// Explode Email_Adress_Array_With_Index into individual rows
-				.withColumn("Exploded_Email", functions.explode_outer(data.col("Email_Adress_Array_With_Index")))
-				// Extract index and email from struct
-				.withColumn("Email_Index", functions.col("Exploded_Email.index"))
-				.withColumn("Email_Address_One", functions.col("Exploded_Email.email"))
-				.drop("Exploded_Email", "Email_Adress_Array_With_Index");
+    	Dataset<Row> emailExploded = data
+        // Ensure non-null and non-empty arrays
+        .filter(functions.col("Email_Adress_Array_With_Index").isNotNull())
+        .filter(functions.size(functions.col("Email_Adress_Array_With_Index")).gt(0))
+
+        // Explode Email_Adress_Array_With_Index
+        .withColumn("Exploded_Email", functions.explode_outer(functions.col("Email_Adress_Array_With_Index")))
+
+        // Extract fields from the struct
+        .withColumn("Email_Index", functions.col("Exploded_Email.index"))
+        .withColumn("Email", functions.col("Exploded_Email.email"))
+
+        // Drop intermediate columns
+        .drop("Exploded_Email", "Email_Adress_Array_With_Index");
+
+        
         
         // Explode Phone_Array
 		Dataset<Row> phoneExploded = emailExploded
