@@ -67,28 +67,33 @@ public class DataHygiene {
     private static Dataset<Row> consolidateAndDeduplicatePIIFields(Dataset<Row> data) {
     	return data
                 // Combine email fields into a single array, remove nulls, remove blanks, and deduplicate
-                .withColumn("Email_Adress_Array",
-                        functions.array_distinct(
-                                functions.array_except(
-                                        functions.array(data.col("Email_Address_One"),
-                                                        data.col("Email_Address_Two"),
-                                                        data.col("Email_Address_Three")),
-                                        functions.lit(new String[]{null, ""}) // Remove null and empty string
-                                )
-                        )
-                )
-
-                // Combine phone fields into a single array, remove nulls, remove blanks, and deduplicate
-                .withColumn("Phone_Number_Array",
-                        functions.array_distinct(
-                                functions.array_except(
-                                        functions.array(data.col("Phone_Number_One"),
-                                                        data.col("Phone_Number_Two"),
-                                                        data.col("Phone_Number_Three")),
-                                        functions.lit(new String[]{null, ""}) // Remove null and empty string
-                                )
-                        )
-                )
+    			// Add index for Email_Address_One, Two, and Three
+    			// Add indices for elements in Email_Adress_Array starting from 4
+                .withColumn("Email_Adress_Array_With_Index",
+                        functions.expr(
+                                "ARRAY_DISTINCT(FILTER(" +
+                                        "TRANSFORM(" +
+                                        "   array(named_struct('index', 1, 'email', Email_Address_One), " +
+                                        "         named_struct('index', 2, 'email', Email_Address_Two), " +
+                                        "         named_struct('index', 3, 'email', Email_Address_Three))" +
+                                        "   || IFNULL(TRANSFORM(Email_Adress_Array, (e, i) -> named_struct('index', i + 4, 'email', e)), array())," +
+                                        "   x -> x.email IS NOT NULL AND x.email != ''" +
+                                        "), y -> y IS NOT NULL))"))
+                .drop("Email_Address_One", "Email_Address_Two", "Email_Address_Three", "Email_Adress_Array")
+                
+                // Add index for Phone_Number_One, Two, and Three
+    			// Add indices for elements in Phone_Number_Array starting from 4
+                .withColumn("Phone_Number_Array_With_Index",
+                        functions.expr(
+                                "ARRAY_DISTINCT(FILTER(" +
+                                        "TRANSFORM(" +
+                                        "   array(named_struct('index', 1, 'phone', Phone_Number_One), " +
+                                        "         named_struct('index', 2, 'phone', Phone_Number_Two), " +
+                                        "         named_struct('index', 3, 'phone', Phone_Number_Three))" +
+                                        "   || IFNULL(TRANSFORM(Phone_Number_Array, (e, i) -> named_struct('index', i + 4, 'phone', e)), array())," +
+                                        "   x -> x.phone IS NOT NULL AND x.phone != ''" +
+                                        "), y -> y IS NOT NULL))"))
+                .drop("Phone_Number_One", "Phone_Number_Two", "Phone_Number_Three", "Phone_Number_Array")
 
                 // Combine MAID fields into a single array, remove nulls, remove blanks, and deduplicate
                 .withColumn("MAID_and_MAID_Type_Array",
@@ -110,17 +115,25 @@ public class DataHygiene {
      * @return Exploded dataset.
      */
     private static Dataset<Row> explodeArrayFields(Dataset<Row> data) {
-        // Explode Email_Array
-        Dataset<Row> emailExploded = data.withColumn("Email_Exploded",
-                functions.explode_outer(data.col("Email_Array")))
-                .withColumn("Email_Address_One", functions.col("Email_Exploded"))
-                .drop("Email_Exploded");
-
+    	
+		// Explode Email_Array
+		Dataset<Row> emailExploded = data
+				// Explode Email_Adress_Array_With_Index into individual rows
+				.withColumn("Exploded_Email", functions.explode_outer(data.col("Email_Adress_Array_With_Index")))
+				// Extract index and email from struct
+				.withColumn("Email_Index", functions.col("Exploded_Email.index"))
+				.withColumn("Email_Address_One", functions.col("Exploded_Email.email"))
+				.drop("Exploded_Email", "Email_Adress_Array_With_Index");
+        
         // Explode Phone_Array
-        Dataset<Row> phoneExploded = emailExploded.withColumn("Phone_Exploded",
-                functions.explode_outer(emailExploded.col("Phone_Array")))
-                .withColumn("Phone_Number_One", functions.col("Phone_Exploded"))
-                .drop("Phone_Exploded");
+		Dataset<Row> phoneExploded = emailExploded
+				// Explode Phone_Number_Array_With_Index into individual rows
+				.withColumn("Exploded_Phone", functions.explode_outer(data.col("Phone_Number_Array_With_Index")))
+				// Extract index and phone from struct
+				.withColumn("Phone_Index", functions.col("Exploded_Phone.index"))
+				.withColumn("Phone_Number_One", functions.col("Exploded_Phone.email"))
+				.drop("Exploded_Phone", "Phone_Number_Array_With_Index");
+		
 
         // Explode MAID_Array
         Dataset<Row> maidExploded = phoneExploded.withColumn("MAID_Exploded",
