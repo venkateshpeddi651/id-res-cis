@@ -109,17 +109,32 @@ public class DataHygiene {
                                         "), y -> y IS NOT NULL))"))
                 .drop("Phone_Number_One", "Phone_Number_Two", "Phone_Number_Three", "Phone_Number_Array")
 
-                // Combine MAID fields into a single array, remove nulls, remove blanks, and deduplicate
-                .withColumn("MAID_and_MAID_Type_Array",
-                        functions.array_distinct(
-                                functions.array_except(
-                                        functions.array(data.col("MAID_One"),
-                                                        data.col("MAID_Two"),
-                                                        data.col("MAID_Three")),
-                                        functions.lit(new String[]{null, ""}) // Remove null and empty string
-                                )
-                        )
-                );
+                // Combine individual MAID fields into a structured array
+                .withColumn("MAID_One_Struct", functions.when(
+                        functions.col("MAID_One").isNotNull().and(functions.col("MAID_One").notEqual("")),
+                        functions.struct(functions.lit(1).alias("index"), functions.col("MAID_One").alias("maid"), functions.col("MAID_Device_Type_One").alias("device_type"))
+                ))
+                .withColumn("MAID_Two_Struct", functions.when(
+                        functions.col("MAID_Two").isNotNull().and(functions.col("MAID_Two").notEqual("")),
+                        functions.struct(functions.lit(2).alias("index"), functions.col("MAID_Two").alias("maid"), functions.col("MAID_Device_Type_Two").alias("device_type"))
+                ))
+                .withColumn("MAID_Three_Struct", functions.when(
+                        functions.col("MAID_Three").isNotNull().and(functions.col("MAID_Three").notEqual("")),
+                        functions.struct(functions.lit(3).alias("index"), functions.col("MAID_Three").alias("maid"), functions.col("MAID_Device_Type_Three").alias("device_type"))
+                ))
+                // Transform the MAID_and_MAID_Type_Array into a structured array
+                .withColumn("Indexed_MAID_Array", functions.expr(
+                        "transform(MAID_and_MAID_Type_Array, (item, idx) -> " +
+                        "struct(idx + 4 as index, split(item, '\\\\|')[0] as maid, split(item, '\\\\|')[1] as device_type))"
+                ))
+                // Consolidate all MAID fields into a single array and deduplicate
+                .withColumn("MAID_and_MAID_Type_Array_With_Index", functions.array_distinct(functions.flatten(functions.array(
+                        functions.array(functions.col("MAID_One_Struct"), functions.col("MAID_Two_Struct"), functions.col("MAID_Three_Struct")),
+                        functions.coalesce(functions.col("Indexed_MAID_Array"), functions.array())
+                ))))
+                // Drop temporary columns
+                .drop("MAID_One_Struct", "MAID_Two_Struct", "MAID_Three_Struct", "Indexed_MAID_Array");
+
     }
 
     /**
@@ -159,10 +174,14 @@ public class DataHygiene {
 		
 
         // Explode MAID_Array
-        Dataset<Row> maidExploded = phoneExploded.withColumn("MAID_Exploded",
-                functions.explode_outer(phoneExploded.col("MAID_Array")))
-                .withColumn("MAID_One", functions.col("MAID_Exploded"))
-                .drop("MAID_Exploded");
+        Dataset<Row> maidExploded = phoneExploded
+                .filter(functions.col("MAID_and_MAID_Type_Array_With_Index").isNotNull())
+                .filter(functions.size(functions.col("MAID_and_MAID_Type_Array_With_Index")).gt(0))
+                .withColumn("Exploded_MAID", functions.explode_outer(functions.col("MAID_and_MAID_Type_Array_With_Index")))
+                .withColumn("MAID_Index", functions.col("Exploded_MAID.index"))
+                .withColumn("MAID", functions.col("Exploded_MAID.maid"))
+                .withColumn("MAID_Device_Type", functions.col("Exploded_MAID.device_type"))
+                .drop("Exploded_MAID", "MAID_and_MAID_Type_Array_With_Index");
 
         return maidExploded;
     }
