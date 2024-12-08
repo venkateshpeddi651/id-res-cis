@@ -141,7 +141,19 @@ public class IdentityMatcher {
 
         // Wipe out clusterId and set hit indicator to 'HR' for name_rank > 50
         return withHitIndicator
-                .withColumn("clusterId", functions.when(functions.col("name_rank").leq(50), functions.col("clusterId")).otherwise(null))
+                .withColumn(
+                        "clusterId",
+                        functions.when(
+                                functions.expr("array_contains(array(columns()), 'name_rank')")
+                                        .and(functions.col("name_rank").leq(50)),
+                                functions.col("clusterId")
+                        )
+                        .when(
+                                functions.expr("!array_contains(array(columns()), 'name_rank')"),
+                                functions.col("clusterId")
+                        )
+                        .otherwise(null)
+                )
                 .withColumn(hitIndicatorColumn, functions.when(functions.col("name_rank").leq(50), functions.col(hitIndicatorColumn)).otherwise("HR"));
     }
     
