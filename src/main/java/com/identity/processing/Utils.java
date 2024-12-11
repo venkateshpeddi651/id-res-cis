@@ -93,4 +93,30 @@ public class Utils {
         }
         return new BigInteger(1, bytes);
     }
+    
+    public static Dataset<Row> performOptimizedRangeJoin(Dataset<Row> customerTable, Dataset<Row> timestampLookupTable) {
+        // Convert customer dates to numeric for range filtering
+        Dataset<Row> formattedCustomerTable = customerTable
+                .withColumn("dt_numeric", functions.col("dt").cast("long"));
+
+        Dataset<Row> formattedTimestampTable = timestampLookupTable
+                .withColumn("start_date_numeric", functions.col("start_date").cast("long"))
+                .withColumn("end_date_numeric", functions.col("end_date").cast("long"));
+
+        // Broadcast the smaller dataset (timestamp lookup table)
+        Dataset<Row> broadcastedTimestampTable = functions.broadcast(formattedTimestampTable);
+
+        // Perform the range join using filter logic
+        Dataset<Row> joinedData = formattedCustomerTable
+                .join(broadcastedTimestampTable,
+                        formattedCustomerTable.col("dt_numeric").geq(broadcastedTimestampTable.col("start_date_numeric"))
+                                .and(formattedCustomerTable.col("dt_numeric").leq(broadcastedTimestampTable.col("end_date_numeric"))),
+                        "left_outer")
+                .select(
+                        formattedCustomerTable.col("*"),
+                        broadcastedTimestampTable.col("week_number")
+                );
+
+        return joinedData;
+    }
 }
