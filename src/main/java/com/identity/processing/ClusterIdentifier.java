@@ -26,8 +26,30 @@ public class ClusterIdentifier {
                         .plus(functions.expr(buildDynamicCaseExpression("match_level", MatchConstants.MATCH_LEVEL_WEIGHTS)))
         );
 
-        // Step 2: Calculate Match Count for each record
-        Dataset<Row> withMatchCount = weightedData.groupBy("Unique_ID")
+        // Step 2: Identify Unique_ID groups with only "IP_ONLY" match_type
+        Dataset<Row> ipOnlyGroups = weightedData.groupBy("Unique_ID")
+                .agg(
+                        functions.collect_set("match_type").alias("unique_match_types")
+                )
+                .withColumn(
+                        "is_ip_only",
+                        functions.when(functions.array_contains(functions.col("unique_match_types"), "IP_ONLY")
+                                .and(functions.size(functions.col("unique_match_types")).equalTo(1)), true)
+                                .otherwise(false)
+                )
+                .select("Unique_ID", "is_ip_only");
+
+        // Step 3: Filter out IP_ONLY groups and handle them separately
+        Dataset<Row> nonIpOnlyData = weightedData.join(ipOnlyGroups, "Unique_ID")
+                .filter(functions.col("is_ip_only").equalTo(false))
+                .drop("is_ip_only");
+
+        Dataset<Row> ipOnlyData = weightedData.join(ipOnlyGroups, "Unique_ID")
+                .filter(functions.col("is_ip_only").equalTo(true))
+                .drop("is_ip_only");
+
+        // Step 4: Calculate Match Count and resolve final_cluster_id for non-IP_ONLY data
+        Dataset<Row> groupedData = nonIpOnlyData.groupBy("Unique_ID")
                 .agg(
                         functions.collect_list("match_type").alias("match_types"),
                         functions.collect_list("clusterId").alias("cluster_ids"),
@@ -35,8 +57,7 @@ public class ClusterIdentifier {
                         functions.size(functions.collect_list("match_type")).alias("Match_Count")
                 );
 
-        // Step 3: Resolve final_cluster_id and handle conflicts
-        Dataset<Row> resolvedData = withMatchCount
+        Dataset<Row> resolvedData = groupedData
                 .withColumn(
                         "final_cluster_id",
                         functions.when(
@@ -52,7 +73,7 @@ public class ClusterIdentifier {
                         ).otherwise(null)
                 );
 
-        // Step 4: Merge records with multiple cluster IDs
+        // Step 5: Merge records with multiple cluster IDs
         Dataset<Row> mergedData = resolvedData
                 .withColumn(
                         "final_cluster_id",
@@ -62,7 +83,11 @@ public class ClusterIdentifier {
                         ).otherwise(functions.col("final_cluster_id"))
                 );
 
-        return mergedData;
+        // Step 6: Combine non-IP_ONLY and IP_ONLY data for final output
+        Dataset<Row> finalIpOnlyData = ipOnlyData.withColumn("indicator", functions.lit(null));
+        Dataset<Row> finalOutput = mergedData.unionByName(finalIpOnlyData);
+
+        return finalOutput;
     }
 
     /**
@@ -86,5 +111,4 @@ public class ClusterIdentifier {
         caseExpression.append("ELSE 0 END");
         return caseExpression.toString();
     }
-
 }
