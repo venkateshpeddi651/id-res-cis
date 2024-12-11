@@ -119,4 +119,50 @@ public class Utils {
 
         return joinedData;
     }
+    
+    public static Dataset<Row> performOptimizedJoin(Dataset<Row> customerTable, Dataset<Row> ipTimestampIndex) {
+        // Step 1: Join customerTable with ipTimestampIndex on IP_Address_One
+        Dataset<Row> joinedData = customerTable.join(
+                ipTimestampIndex,
+                customerTable.col("IP_Address_One").equalTo(ipTimestampIndex.col("IP_Address_One")),
+                "inner"
+        );
+
+        // Step 2: Filter and extract relevant elements from wk_ip_info
+        Dataset<Row> filteredData = joinedData.withColumn(
+                "matched_info",
+                functions.expr(
+                        "filter(wk_ip_info, info -> int(split(info, '~')[0]) = week_number)"
+                )
+        );
+
+        // Step 3: Parse matched_info array directly without exploding
+        Dataset<Row> parsedData = filteredData.withColumn(
+                "parsed_info",
+                functions.expr(
+                        "transform(matched_info, info -> named_struct('week_number', split(info, '~')[0], 'pid', split(info, '~')[1], 'current_flag', split(info, '~')[2]))"
+                )
+        );
+
+        // Step 4: Extract the first element of matched_info (since only one match is expected per week_number)
+        Dataset<Row> finalData = parsedData.withColumn(
+                "result_info",
+                functions.expr("element_at(parsed_info, 1)") // Extract the first matching record
+        );
+
+        // Step 5: Add pid and current_flag as separate columns
+        Dataset<Row> result = finalData
+                .withColumn("pid", functions.col("result_info.pid"))
+                .withColumn("current_flag", functions.col("result_info.current_flag"))
+                .drop("matched_info", "parsed_info", "result_info");
+
+        // Step 6: Select required columns for the final output
+        return result.select(
+                customerTable.col("Unique_Id"),
+                customerTable.col("IP_Address_One"),
+                customerTable.col("week_number"),
+                result.col("pid"),
+                result.col("current_flag")
+        );
+    }
 }
