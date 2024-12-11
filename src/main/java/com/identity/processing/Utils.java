@@ -1,12 +1,15 @@
 package com.identity.processing;
 
 import java.util.Set;
+import java.math.BigInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.functions;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 public class Utils {
 
@@ -67,5 +70,27 @@ public class Utils {
      */
     private static Dataset<Row> unionTwoDatasets(Dataset<Row> dataset1, Dataset<Row> dataset2) {
         return dataset1.unionByName(dataset2);
+    }
+    
+    public static int ipv4ToInt(String ipv4) throws UnknownHostException {
+        InetAddress inetAddress = InetAddress.getByName(ipv4);
+        byte[] bytes = inetAddress.getAddress();
+        if (bytes.length != 4) {
+            throw new IllegalArgumentException("Invalid IPv4 address.");
+        }
+        int result = 0;
+        for (byte b : bytes) {
+            result = (result << 8) | (b & 0xFF);
+        }
+        return result;
+    }
+    
+    public static BigInteger ipv6ToInt(String ipv6) throws UnknownHostException {
+        InetAddress inetAddress = InetAddress.getByName(ipv6);
+        byte[] bytes = inetAddress.getAddress();
+        if (bytes.length != 16) {
+            throw new IllegalArgumentException("Invalid IPv6 address.");
+        }
+        return new BigInteger(1, bytes);
     }
 }
