@@ -302,4 +302,38 @@ public class IdentityMatcher {
                         .orElse("ELSE 100")));
 	}
 	
+	
+	/**
+	 * Filters records within a dataset to retain one record per group based on Name Rank & Email Owner.
+	 *
+	 * This method operates on a dataset containing multiple records for the same `Generated_Record_ID` and `name_rank`.
+	 * It groups these records and retains a single record from each group, giving priority to records with 
+	 * `TU_email_owner='Y'`, followed by `TU_email_owner='N'`, and finally null values.
+	 *
+	 * Steps:
+	 * 1. Defines a Spark window partitioned by `Generated_Record_ID` and `name_rank` to group records.
+	 * 2. Orders records within each group by the priority of `TU_email_owner` (Y > N > null).
+	 * 3. Assigns a row number to each record in the group based on the defined ordering.
+	 * 4. Filters the dataset to retain only the record with the highest priority (email_owner_rank = 1) for each group.
+	 */
+
+	public static Dataset<Row> selectBestEmailOwner(Dataset<Row> inputData) {
+        // Step 1: Define a window partitioned by Generated_Record_ID and name_rank, ordered by TU_email_owner
+        WindowSpec windowSpec = Window
+                .partitionBy("Generated_Record_ID", "name_rank")
+                .orderBy(functions.when(functions.col("TU_email_owner").equalTo("Y"), 1)
+                        .when(functions.col("TU_email_owner").equalTo("N"), 2)
+                        .otherwise(3));
+
+        // Step 2: Add a row number to prioritize records with TU_email_owner='Y'
+        Dataset<Row> rankedData = inputData
+                .withColumn("email_owner_rank", functions.row_number().over(windowSpec));
+
+        // Step 3: Filter to keep only the top-ranked record for each group
+        Dataset<Row> filteredData = rankedData.filter(functions.col("email_owner_rank").equalTo(1))
+                .drop("email_owner_rank"); // Drop the row_num column as it's no longer needed
+
+        return filteredData;
+    }
+	
 }
