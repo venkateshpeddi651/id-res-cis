@@ -56,23 +56,13 @@ public class AddressParserUDF implements UDF1<Row, Row> {
                     strName = "RURAL ROUTE";
                     addrNum = extractAfter(normalizedAddr, "RR");
                 } else {
-                    // Address number extraction
+                	 // Address number extraction
                     addrNum = extractAddressNumber(words);
-                    
-                    // Handle concatenated pre-directional codes with numbers
-                    String potentialPredir = extractPreDirectional(words);
-                    if (!potentialPredir.isEmpty() && addrNum.matches(".*[A-Z].*")) {
-                        predirCde = potentialPredir;
-                        addrNum = addrNum.replace(predirCde, "");
-                    } else {
-                        predirCde = potentialPredir;
-                    }
 
-                    // Extract street name and type
+                    // Check for directional and street name
+                    predirCde = extractDirectional(words, addrNum);
                     strName = extractStreetName(words, addrNum, predirCde);
                     prmStrTypCde = extractStreetSuffix(words);
-
-                    // Post-directional codes
                     postdirCde = extractPostDirectional(words);
 
                     // Adjust cases where street name is mistakenly identified as directional
@@ -159,9 +149,15 @@ public class AddressParserUDF implements UDF1<Row, Row> {
         return NUMERALS.getOrDefault(word, word);
     }
 
-    private String extractPreDirectional(String[] words) {
-        if (words.length > 0 && DIRECTIONALS.containsKey(words[0])) {
-            return DIRECTIONALS.get(words[0]);
+    private String extractDirectional(String[] words, String addrNum) {
+        if (words.length > 2) {
+            for (int i = 0; i < words.length; i++) {
+                if (words[i].equals(addrNum)) {
+                    if (i + 1 < words.length && DIRECTIONALS.containsKey(words[i + 1])) {
+                        return DIRECTIONALS.get(words[i + 1]);
+                    }
+                }
+            }
         }
         return "";
     }
