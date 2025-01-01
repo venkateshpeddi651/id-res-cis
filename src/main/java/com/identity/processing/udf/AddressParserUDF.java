@@ -12,8 +12,11 @@ public class AddressParserUDF implements UDF1<Row, Row> {
     private static final Map<String, String> STREET_SUFFIXES = createStreetSuffixMap();
     private static final Map<String, String> PO_BOX_TERMS = createPOBoxMap();
     private static final Map<String, String> RURAL_ROUTE_TERMS = createRuralRouteMap();
+    private static final Map<String, String> ORDINALS = createOrdinalsLookup();
+    private static final Map<String, String> NUMERALS = createNumeralsLookup();
     private static final Pattern EXTRA_SPACES = Pattern.compile("\\s+");
     private static final Pattern NUMERIC_PATTERN = Pattern.compile("^\\d+$");
+    private static final Pattern ALPHA_NUMERIC_PATTERN = Pattern.compile("^[A-Z]*\\d+[A-Z]*$");
 
     @Override
     public Row call(Row input) {
@@ -53,11 +56,36 @@ public class AddressParserUDF implements UDF1<Row, Row> {
                     strName = "RURAL ROUTE";
                     addrNum = extractAfter(normalizedAddr, "RR");
                 } else {
+                    // Address number extraction
                     addrNum = extractAddressNumber(words);
-                    predirCde = extractPreDirectional(words);
-                    strName = extractStreetName(words);
+                    
+                    // Handle concatenated pre-directional codes with numbers
+                    String potentialPredir = extractPreDirectional(words);
+                    if (!potentialPredir.isEmpty() && addrNum.matches(".*[A-Z].*")) {
+                        predirCde = potentialPredir;
+                        addrNum = addrNum.replace(predirCde, "");
+                    } else {
+                        predirCde = potentialPredir;
+                    }
+
+                    // Extract street name and type
+                    strName = extractStreetName(words, addrNum, predirCde);
                     prmStrTypCde = extractStreetSuffix(words);
+
+                    // Post-directional codes
                     postdirCde = extractPostDirectional(words);
+
+                    // Adjust cases where street name is mistakenly identified as directional
+                    if (strName.isEmpty() && !predirCde.isEmpty() && STREET_SUFFIXES.containsKey(predirCde)) {
+                        strName = predirCde;
+                        predirCde = "";
+                    }
+
+                    // Adjust cases where suffix is appended incorrectly to the street name
+                    if (strName.isEmpty() && !prmStrTypCde.isEmpty() && STREET_SUFFIXES.containsKey(prmStrTypCde)) {
+                        strName = prmStrTypCde;
+                        prmStrTypCde = "";
+                    }
                 }
             }
 
@@ -66,12 +94,17 @@ public class AddressParserUDF implements UDF1<Row, Row> {
                 String[] addrLine2Words = preprocessAddress(addrLine2).split(" ");
                 if (addrLine2Words.length > 1) {
                     untTypNme = addrLine2Words[0];
-                    untNum = addrLine2Words[1];
+                    untNum = applyNumeralsLookup(addrLine2Words[1]);
                 }
             }
 
             // Step 3: Process ZIP Code for Extension
             zipExt = extractZipExtension(zipCode);
+
+            // Step 4: Validate and Generate Warnings
+            if (addrNum.isEmpty() || strName.isEmpty()) {
+                warnings = "Incomplete address information.";
+            }
 
         } catch (Exception e) {
             errors = "Error parsing address: " + e.getMessage();
@@ -111,11 +144,19 @@ public class AddressParserUDF implements UDF1<Row, Row> {
 
     private String extractAddressNumber(String[] words) {
         for (String word : words) {
-            if (NUMERIC_PATTERN.matcher(word).matches()) {
-                return word;
+            if (NUMERIC_PATTERN.matcher(word).matches() || ALPHA_NUMERIC_PATTERN.matcher(word).matches()) {
+                return applyOrdinalsLookup(word);
             }
         }
         return "";
+    }
+
+    private String applyOrdinalsLookup(String word) {
+        return ORDINALS.getOrDefault(word, word);
+    }
+
+    private String applyNumeralsLookup(String word) {
+        return NUMERALS.getOrDefault(word, word);
     }
 
     private String extractPreDirectional(String[] words) {
@@ -125,10 +166,17 @@ public class AddressParserUDF implements UDF1<Row, Row> {
         return "";
     }
 
-    private String extractStreetName(String[] words) {
+    private String extractStreetName(String[] words, String addrNum, String predirCde) {
         StringBuilder nameBuilder = new StringBuilder();
+        boolean startAdding = false;
         for (String word : words) {
-            if (!DIRECTIONALS.containsKey(word) && !STREET_SUFFIXES.containsKey(word) && !NUMERIC_PATTERN.matcher(word).matches()) {
+            // Skip the address number and predirectional code
+            if (word.equals(addrNum) || word.equals(predirCde)) {
+                startAdding = true;
+                continue;
+            }
+            // Add valid street name parts
+            if (startAdding && !NUMERIC_PATTERN.matcher(word).matches() && !STREET_SUFFIXES.containsKey(word) && !DIRECTIONALS.containsKey(word)) {
                 nameBuilder.append(word).append(" ");
             }
         }
@@ -198,6 +246,26 @@ public class AddressParserUDF implements UDF1<Row, Row> {
         Map<String, String> map = new HashMap<>();
         map.put("RURAL ROUTE", "RURAL ROUTE"); map.put("R R", "RURAL ROUTE");
         map.put("RR", "RURAL ROUTE");
+        return map;
+    }
+
+    private static Map<String, String> createOrdinalsLookup() {
+        Map<String, String> map = new HashMap<>();
+        map.put("FIRST", "1ST"); map.put("1ST", "1ST");
+        map.put("SECOND", "2ND"); map.put("2ND", "2ND");
+        map.put("THIRD", "3RD"); map.put("3RD", "3RD");
+        map.put("FOURTH", "4TH"); map.put("4TH", "4TH");
+        map.put("FIFTH", "5TH"); map.put("5TH", "5TH");
+        return map;
+    }
+
+    private static Map<String, String> createNumeralsLookup() {
+        Map<String, String> map = new HashMap<>();
+        map.put("FIRST", "1"); map.put("1ST", "1"); map.put("1", "1");
+        map.put("SECOND", "2"); map.put("2ND", "2"); map.put("2", "2");
+        map.put("THIRD", "3"); map.put("3RD", "3"); map.put("3", "3");
+        map.put("FOURTH", "4"); map.put("4TH", "4"); map.put("4", "4");
+        map.put("FIFTH", "5"); map.put("5TH", "5"); map.put("5", "5");
         return map;
     }
     
